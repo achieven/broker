@@ -1,6 +1,6 @@
 {
   "name": "@achieven/broker",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Kafka broker module shared across bpm-music-runner services",
   "author": "",
   "license": "UNLICENSED",
