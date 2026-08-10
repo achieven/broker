@@ -1,12 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Kafka } from 'kafkajs';
 
-export const topics = {
-    clickNew: 'click-new',
-    clickFiltered: 'click-filtered',
-    clickCleared: 'click-cleared',
-}
-
 @Injectable()
 export class BrokerService {
     public kafka: Kafka
