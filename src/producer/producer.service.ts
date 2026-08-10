@@ -3,18 +3,18 @@ import { BrokerService } from '../broker.service';
 
 
 export abstract class ProducerService {
-    abstract producer: Producer;
+    protected producer: Producer;
     protected topic: string;
     constructor(
         protected readonly brokerService: BrokerService,
         topic: string,
     ) {
+        const producer = this.brokerService.kafka.producer()
+        this.producer = producer
         this.topic = topic
     }
 
     async onModuleInit() {
-        const producer = this.brokerService.kafka.producer()
-        this.producer = producer
         await this.producer.connect()
     }
 

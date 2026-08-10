@@ -1,9 +1,18 @@
 import { BrokerService } from '../broker.service';
 export abstract class ConsumerService {
-    protected abstract callback: (data: any) => Promise<void>
-    protected abstract groupId: string;
-    protected abstract topic: string;
-    constructor(protected readonly brokerService: BrokerService, callback: (data: any) => Promise<void>)   {}
+    protected callback: (data: any) => Promise<void>
+    protected groupId: string;
+    protected topic: string;
+    constructor(
+        protected readonly brokerService: BrokerService,
+        callback: (data: any) => Promise<void>,
+        groupId: string,
+        topic: string
+    )   {
+        this.callback = callback
+        this.groupId = groupId
+        this.topic = topic
+    }
 
     async onModuleInit() {
         const consumer = this.brokerService.kafka.consumer({ groupId: this.groupId })

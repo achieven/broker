@@ -1,6 +1,6 @@
 {
   "name": "@achieven/broker",
-  "version": "0.1.5",
+  "version": "0.1.7",
   "description": "Kafka broker module shared across bpm-music-runner services",
   "author": "",
   "license": "UNLICENSED",
@@ -20,7 +20,8 @@
     "build": "tsc -p tsconfig.build.json",
     "prepublishOnly": "npm run build",
     "test": "jest",
-    "test:watch": "jest --watch"
+    "test:watch": "jest --watch",
+    "fullPublish": "git push -u origin main && npm run build && export GITHUB_TOKEN=${GITHUB_TOKEN} && npm publish"
   },
   "dependencies": {
     "kafkajs": "2.2.4"
