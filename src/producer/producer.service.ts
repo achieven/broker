@@ -3,12 +3,13 @@ import { BrokerService } from '../broker.service';
 
 
 export abstract class ProducerService {
-    protected abstract producer: Producer;
-    protected abstract topic: string;
+    abstract producer: Producer;
+    protected topic: string;
     constructor(
         protected readonly brokerService: BrokerService,
+        topic: string,
     ) {
-        
+        this.topic = topic
     }
 
     async onModuleInit() {
