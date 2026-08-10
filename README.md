@@ -2,16 +2,6 @@
 
 Kafka broker module (`BrokerModule` / `BrokerService`) shared across bpm-music-runner services. Published as a private package on GitHub Packages.
 
-## Installing in a consuming project
-
-1. Add a `.npmrc` in the project root (or `~/.npmrc` for local dev):
-
-   ```
-   @achieven:registry=https://npm.pkg.github.com
-   //npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
-   ```
-
-2. Set a `GITHUB_TOKEN` environment variable with a personal access token that has `read:packages` scope (in CI, the default `GITHUB_TOKEN` works if the consuming repo is also owned by `achieven`; otherwise use a PAT).
 
 3. Install:
 
