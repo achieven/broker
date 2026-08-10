@@ -1,2 +1,6 @@
 export { BrokerModule } from './broker.module';
-export { BrokerService, topics } from './broker.service';
+export { BrokerService } from './broker.service';
+export { ProducerModule } from './producer/producer.module';
+export { ProducerService } from './producer/producer.service';
+export { ConsumerModule } from './consumer/consumer.module';
+export { ConsumerService } from './consumer/consumer.service';
