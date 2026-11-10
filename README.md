@@ -1,7 +1,7 @@
 # @achieven/broker
 
 Kafka broker module (`BrokerModule` / `BrokerService`) shared across bpm-music-runner services. Published as a private package on GitHub Packages.
-
+  
 
 3. Install:
 
