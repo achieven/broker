@@ -1,4 +1,4 @@
-import { Producer } from 'kafkajs';
+import { Producer, ProducerConfig } from 'kafkajs';
 import { BrokerService } from '../broker.service';
 
 
@@ -8,8 +8,9 @@ export abstract class ProducerService {
     constructor(
         protected readonly brokerService: BrokerService,
         topic: string,
+        config: ProducerConfig = {},
     ) {
-        const producer = this.brokerService.kafka.producer()
+        const producer = this.brokerService.kafka.producer(config)
         this.producer = producer
         this.topic = topic
     }

@@ -34,7 +34,7 @@ export abstract class DurableProducerService extends ProducerService {
         await super.onModuleInit();
     }
 
-    async produce(message: any) {
+    async produce(_topic: string, message: any) { // topic arg kept for signature compatibility with ProducerService; this.topic is always used
         await this.producer.send({
             topic: this.topic,
             acks: -1, // all in-sync replicas
