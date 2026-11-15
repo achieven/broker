@@ -35,6 +35,7 @@ export class Consumer {
     private dlqTopic?: string;
     private consumer?: KafkaConsumer;
     private dlqProducer?: KafkaProducer;
+    private stopped = false;
 
     constructor(private readonly broker: BrokerService) {}
 
@@ -98,7 +99,13 @@ export class Consumer {
             await this.dlqProducer.connect();
         }
 
-        this.consumer = this.broker.kafka.consumer({ groupId: this.groupId, readUncommitted: this.readUncommitted });
+        this.stopped = false;
+        this.consumer = this.broker.kafka.consumer({
+            groupId: this.groupId,
+            readUncommitted: this.readUncommitted,
+            // kafkajs restarts a crashed consumer by default; once stop() was called it must never come back to life
+            retry: { restartOnFailure: async () => !this.stopped },
+        });
         await this.consumer.connect();
         await subscribeWhenTopicVisible(this.consumer, topic, this.fromBeginning);
         await this.consumer.run({
@@ -154,6 +161,7 @@ export class Consumer {
     }
 
     async stop() {
+        this.stopped = true;
         await this.consumer?.disconnect();
         await this.dlqProducer?.disconnect();
     }

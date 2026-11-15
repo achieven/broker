@@ -14,10 +14,40 @@ export function startProxies() {
     return group.start().then(() => group);
 }
 
+const clients: Array<{ disconnect(): Promise<unknown> }> = [];
+
 export function newBroker(): BrokerService {
     process.env.BROKER_HOST = 'localhost';
     process.env.BROKER_PORT = String(PROXY_BOOTSTRAP_PORT);
-    return new BrokerService();
+    const broker = new BrokerService();
+    // Remember every producer/consumer/admin created through this broker (including the ones the library creates
+    // internally) so the harness can close whatever a test left behind. See disconnectAllClients().
+    const kafka: any = broker.kafka;
+    for (const factory of ['producer', 'consumer', 'admin']) {
+        const original = kafka[factory].bind(kafka);
+        kafka[factory] = (...args: any[]) => {
+            if (factory === 'consumer') {
+                // kafkajs restarts crashed consumers by default, even after disconnect(); in tests a crash must stay a crash
+                const config = args[0] ?? {};
+                args[0] = { ...config, retry: { restartOnFailure: async () => false, ...config.retry } };
+            }
+            const client = original(...args);
+            clients.push(client);
+            return client;
+        };
+    }
+    return broker;
+}
+
+/**
+ * A kafkajs client that outlives its test file keeps running inside the shared Jest process, and its next lazy
+ * `require` makes Jest print "You are trying to `require` a file after the Jest environment has been torn down" and
+ * set exit code 1, even though every test passed. So every file ends by disconnecting everything it created.
+ */
+export async function disconnectAllClients() {
+    await Promise.all(clients.splice(0).map((c) =>
+        Promise.race([c.disconnect().catch(() => {}), new Promise((r) => setTimeout(r, 10000).unref())]),
+    ));
 }
 
 export const uniq = (prefix: string) => `${prefix}-${randomUUID().slice(0, 8)}`;
