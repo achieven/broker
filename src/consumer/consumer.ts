@@ -1,4 +1,4 @@
-import { Consumer as KafkaConsumer, EachMessagePayload, KafkaMessage } from 'kafkajs';
+import { KafkaJS } from '@confluentinc/kafka-javascript';
 import { BrokerService } from '../broker.service';
 import { IDEMPOTENCY_KEY_HEADER, IdempotencyStore } from '../idempotency/idempotency-store';
 import { MongoCollectionLike, MongoIdempotencyOptions, mongoIdempotencyStore } from '../idempotency/mongo-idempotency-store';
@@ -51,7 +51,7 @@ type Verdict =
  *
  * Two processing modes, same builder:
  *
- * DEFAULT (unchanged): kafkajs auto-commits offsets; an error thrown by the handler is retried by kafkajs;
+ * DEFAULT (unchanged): the client auto-commits offsets; an error thrown by the handler is retried by the client;
  * with a legacy idempotency store (withMongoIdempotencyCheck / withMysqlIdempotencyCheck / withIdempotencyStore)
  * missing keys and duplicate-key failures go to `<topic>.dlq`, and ensureSchema() runs at start().
  *
@@ -83,7 +83,7 @@ export class Consumer {
     private gatePollMs?: number;
     private listeners: ConsumerEventListener[] = [];
 
-    private consumer?: KafkaConsumer;
+    private consumer?: KafkaJS.Consumer;
     private dlq?: DlqWriter;
     private gate?: Gate;
     private transactionalId?: string;
@@ -184,7 +184,7 @@ export class Consumer {
         return this;
     }
 
-    /** How many partitions are processed at the same time (kafkajs partitionsConsumedConcurrently). Order is kept within a partition. */
+    /** How many partitions are processed at the same time (partitionsConsumedConcurrently). Order is kept within a partition. */
     withPartitionConcurrency(partitions: number): this {
         if (!Number.isInteger(partitions) || partitions < 1) throw new Error('withPartitionConcurrency needs an integer >= 1');
         this.concurrency = partitions;
@@ -247,7 +247,7 @@ export class Consumer {
                 throw new Error(`Transactional id "${this.transactionalId}" is already used by another producer in this process`);
             }
             liveTransactionalIds.add(this.transactionalId);
-            const writer = new TransactionalDlqWriter(this.broker, groupId, dlqTopic, this.transactionalId);
+            const writer = new TransactionalDlqWriter(this.broker, dlqTopic, this.transactionalId);
             this.dlq = writer;
             try {
                 await writer.connect();
@@ -267,15 +267,17 @@ export class Consumer {
         }
 
         this.consumer = this.broker.kafka.consumer({
-            groupId,
-            readUncommitted: this.readUncommitted,
-            // kafkajs restarts a crashed consumer by default; once stop() was called it must never come back to life
-            retry: { restartOnFailure: async () => !this.stopped },
+            kafkaJS: {
+                groupId,
+                readUncommitted: this.readUncommitted,
+                fromBeginning: this.fromBeginning,
+                ...(this.strict ? { autoCommit: false } : {}),
+            },
         });
+        if (this.dlq instanceof TransactionalDlqWriter) this.dlq.attachConsumer(this.consumer);
         await this.consumer.connect();
-        await subscribeWhenTopicVisible(this.consumer, topic, this.fromBeginning);
+        await subscribeWhenTopicVisible(this.consumer, topic);
         await this.consumer.run({
-            ...(this.strict ? { autoCommit: false } : {}),
             ...(this.concurrency ? { partitionsConsumedConcurrently: this.concurrency } : {}),
             eachMessage: (payload) => this.handleMessage(payload, dlqTopic),
         });
@@ -296,7 +298,7 @@ export class Consumer {
 
     // ---------------------------------------------------------------- per message
 
-    private async handleMessage({ topic, partition, message, heartbeat }: EachMessagePayload, dlqTopic: string): Promise<void> {
+    private async handleMessage({ topic, partition, message, heartbeat }: KafkaJS.EachMessagePayload, dlqTopic: string): Promise<void> {
         if (this.stopped) return;
         console.log('Received message:', message.value?.toString());
         if (!(await this.waitWhileHalted(heartbeat))) return;
@@ -321,11 +323,11 @@ export class Consumer {
         return this.finish(meta, message, await this.deadLetter(meta, message, dlqTopic, heartbeat, verdict, record), heartbeat);
     }
 
-    private finish(_meta: MessageMeta, _message: KafkaMessage, _result: 'dlq' | 'stopped', _heartbeat: () => Promise<void>): void {
+    private finish(_meta: MessageMeta, _message: KafkaJS.KafkaMessage, _result: 'dlq' | 'stopped', _heartbeat: () => Promise<void>): void {
         // dead-lettering already emitted its event; in strict mode the offset was committed inside the DLQ transaction
     }
 
-    /** Default mode: duplicates and missing keys are handled, everything else is rethrown for kafkajs to retry. */
+    /** Default mode: duplicates and missing keys are handled, everything else is rethrown for the client to retry. */
     private async runDefault(record: ConsumedMessage): Promise<Verdict> {
         try {
             return { kind: 'done', outcome: await this.attempt(record), attempts: 1 };
@@ -439,14 +441,14 @@ export class Consumer {
 
     // ---------------------------------------------------------------- offsets and DLQ
 
-    /** Commits offset+1 of this message only, and only after its handler finished. Failures propagate: kafkajs redelivers. */
+    /** Commits offset+1 of this message only, and only after its handler finished. Failures propagate: the client redelivers. */
     private async commit({ topic, partition, offset }: MessageMeta): Promise<void> {
         await this.consumer!.commitOffsets([{ topic, partition, offset: (BigInt(offset) + 1n).toString() }]);
     }
 
     private async deadLetter(
         meta: MessageMeta,
-        message: KafkaMessage,
+        message: KafkaJS.KafkaMessage,
         dlqTopic: string,
         heartbeat: () => Promise<void>,
         verdict: { errorClass: string; reason: string; error?: unknown },
@@ -465,7 +467,7 @@ export class Consumer {
                 void record;
                 return 'dlq';
             } catch (err) {
-                // Default mode: as before, throw and let kafkajs redeliver. Strict mode: nothing was committed (the
+                // Default mode: as before, throw and let the client redeliver. Strict mode: nothing was committed (the
                 // transaction aborted), so keep trying until the DLQ is reachable; losing the message is not an option.
                 if (!this.strict) throw err;
                 const delayMs = backoffDelay(attempt, this.retryPolicy);
@@ -519,11 +521,15 @@ export class Consumer {
     }
 }
 
+function isUnknownTopic(err: any): boolean {
+    return err?.type === 'UNKNOWN_TOPIC_OR_PARTITION' || err?.code === KafkaJS.ErrorCodes.ERR_UNKNOWN_TOPIC_OR_PART;
+}
+
 function errorText(err: unknown): string {
     return String((err as Error)?.message ?? err);
 }
 
-function toConsumedMessage(message: KafkaMessage, meta: MessageMeta): ConsumedMessage {
+function toConsumedMessage(message: KafkaJS.KafkaMessage, meta: MessageMeta): ConsumedMessage {
     const headers = message.headers ?? {};
     let parsed: { value: any } | undefined;
     return {
@@ -544,13 +550,13 @@ function toConsumedMessage(message: KafkaMessage, meta: MessageMeta): ConsumedMe
 }
 
 /** A topic created moments ago may not be visible on every broker yet; retry instead of failing the consumer's startup. */
-async function subscribeWhenTopicVisible(consumer: KafkaConsumer, topic: string, fromBeginning: boolean, timeoutMs = 30000) {
+async function subscribeWhenTopicVisible(consumer: KafkaJS.Consumer, topic: string, timeoutMs = 30000) {
     const start = Date.now();
     for (;;) {
         try {
-            return await consumer.subscribe({ topic, fromBeginning });
+            return await consumer.subscribe({ topic });
         } catch (err: any) {
-            if (err?.type !== 'UNKNOWN_TOPIC_OR_PARTITION' || Date.now() - start > timeoutMs) throw err;
+            if (!isUnknownTopic(err) || Date.now() - start > timeoutMs) throw err;
             await new Promise((resolve) => setTimeout(resolve, 300));
         }
     }

@@ -1,4 +1,4 @@
-import { IHeaders } from 'kafkajs';
+import { KafkaJS } from '@confluentinc/kafka-javascript';
 import { ErrorClass } from './classify/error-class';
 
 export interface MessageMeta {
@@ -12,7 +12,7 @@ export interface ConsumedMessage {
     /** Raw value. Never null/empty here: tombstones and empty values are dead-lettered before the handler runs. */
     value: Buffer;
     key: Buffer | null;
-    headers: IHeaders;
+    headers: KafkaJS.IHeaders;
     meta: MessageMeta;
     /** The idempotency key resolved by the idempotency policy (undefined when none is configured or found). */
     idempotencyKey?: string;

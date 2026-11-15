@@ -111,7 +111,7 @@ describe('transactional producer', () => {
         const committed = await collect(broker, topic.name, (c) => c.withReadCommitted());
 
         // "crashed" producer: opens a transaction, writes, never commits
-        const zombie = broker.kafka.producer({ transactionalId: id, idempotent: true, maxInFlightRequests: 1 });
+        const zombie = broker.kafka.producer({ kafkaJS: { transactionalId: id, idempotent: true, maxInFlightRequests: 1 } });
         await zombie.connect();
         const open = await zombie.transaction();
         await open.send({ topic: topic.name, messages: [{ value: JSON.stringify({ id: 'zombie' }) }] });

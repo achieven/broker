@@ -8,7 +8,7 @@ export function backoffDelay(attempt: number, policy: Required<RetryPolicy>, ran
     return Math.round(exp / 2 + random() * (exp / 2));
 }
 
-/** Serialises async tasks: a kafkajs transactional producer can run only one transaction at a time. */
+/** Serialises async tasks: a transactional producer can run only one transaction at a time. */
 export class Mutex {
     private tail: Promise<unknown> = Promise.resolve();
     run<T>(task: () => Promise<T>): Promise<T> {

@@ -25,7 +25,7 @@
     "test:integration": "jest --config jest.integration.config.js"
   },
   "dependencies": {
-    "kafkajs": "2.2.4"
+    "@confluentinc/kafka-javascript": "1.11.0"
   },
   "peerDependencies": {
     "@nestjs/common": ">=10 <12",

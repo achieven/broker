@@ -10,7 +10,7 @@ describe('read_committed vs read_uncommitted consumers (transactional producer)'
     afterAll(async () => { await proxies.stop(); });
 
     const txProducer = async () => {
-        const p = broker.kafka.producer({ transactionalId: uniq('tx'), idempotent: true, maxInFlightRequests: 1 });
+        const p = broker.kafka.producer({ kafkaJS: { transactionalId: uniq('tx'), idempotent: true, maxInFlightRequests: 1 } });
         await p.connect();
         return p;
     };

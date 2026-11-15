@@ -1,4 +1,4 @@
-import { KafkaJSNonRetriableError } from 'kafkajs';
+import { KafkaJS } from '@confluentinc/kafka-javascript';
 import { DataTypes, Model, ModelStatic, Sequelize } from 'sequelize';
 import { Consumer, ConsumerEvent, ConsumedMessage } from '../src/consumer/consumer';
 import { committedOffset, newBroker, plainTopic, readRaw, sleep, startProxies, uniq, waitFor } from './helpers/cluster';
@@ -58,12 +58,17 @@ describe('strict consumer', () => {
     }
 
     async function send(topic: string, messages: Array<{ key?: string; value: string | null; partition?: number; headers?: Record<string, string> }>) {
-        const producer = broker.kafka.producer({ idempotent: true, maxInFlightRequests: 1 });
+        const producer = broker.kafka.producer({ kafkaJS: { idempotent: true, acks: -1, maxInFlightRequests: 1 } });
         await producer.connect();
-        await producer.send({ topic, acks: -1, messages });
+        await producer.send({ topic, messages });
         await producer.disconnect();
     }
     const json = (o: object) => JSON.stringify(o);
+    /** The client objects are classes with private state, so they can't be spread: wrap them, binding methods to the real object. */
+    const overriding = <T extends object>(target: T, overrides: Record<string, unknown>): T =>
+        new Proxy(target, {
+            get: (t: any, prop) => (prop in overrides ? overrides[prop as string] : typeof t[prop] === 'function' ? t[prop].bind(t) : t[prop]),
+        });
 
     /** Strict consumer with MySQL classification, recording every event. */
     function strictConsumer(topic: string, groupId = uniq('g')) {
@@ -246,15 +251,14 @@ describe('strict consumer', () => {
         const makeProducer = faulty.kafka.producer.bind(faulty.kafka);
         faulty.kafka.producer = ((config: any) => {
             const producer = makeProducer(config);
-            if (!config?.transactionalId) return producer;
-            return {
-                ...producer,
+            if (!config?.kafkaJS?.transactionalId) return producer;
+            return overriding(producer, {
                 transaction: async () => {
                     const tx = await producer.transaction();
                     // the record is already sent inside the transaction when the offset commit fails: it must be rolled back
-                    return { ...tx, sendOffsets: async (a: any) => { if (fault.on) throw new Error('injected: sendOffsets failed'); return tx.sendOffsets(a); } };
+                    return overriding(tx, { sendOffsets: async (a: any) => { if (fault.on) throw new Error('injected: sendOffsets failed'); return tx.sendOffsets(a); } });
                 },
-            };
+            });
         }) as any;
 
         const groupId = uniq('g');
@@ -290,8 +294,8 @@ describe('strict consumer', () => {
         const crashing = newBroker();
         const makeConsumer = crashing.kafka.consumer.bind(crashing.kafka);
         crashing.kafka.consumer = ((config: any) => {
-            const c = makeConsumer({ ...config, retry: { restartOnFailure: async () => false } });
-            return { ...c, commitOffsets: async () => { throw new KafkaJSNonRetriableError('process died before commit'); } };
+            const c = makeConsumer(config);
+            return overriding(c, { commitOffsets: async () => { throw new KafkaJS.KafkaJSError('process died before commit'); } });
         }) as any;
         const a = track(new Consumer(crashing)).withGroupId(groupId).withTopic(topic).withStrictProcessing().withMysqlClassifier()
             .onRecord(async (m) => { handledBy.push(`A@${m.meta.offset}`); await insert(m); });
@@ -341,7 +345,7 @@ describe('strict consumer', () => {
             await admin.connect();
             const { groups } = await admin.describeGroups([groupId]);
             await admin.disconnect();
-            expect(groups[0]).toMatchObject({ state: 'Stable' });
+            expect(groups[0]).toMatchObject({ state: KafkaJS.ConsumerGroupStates.STABLE });
             expect(groups[0].members).toHaveLength(1);
 
             state.halted = false;

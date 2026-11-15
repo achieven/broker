@@ -7,7 +7,7 @@ import { mysqlIdempotencyStore } from '../idempotency/mysql-idempotency-store';
 function fakeBroker() {
     const sent: any[] = [];
     let eachMessage: any;
-    const kafka = {
+    const kafka: any = {
         producer: jest.fn(() => ({ connect: jest.fn(), disconnect: jest.fn(), send: jest.fn(async (r) => { sent.push(r); }) })),
         consumer: jest.fn(() => ({
             connect: jest.fn(), disconnect: jest.fn(), subscribe: jest.fn(),
@@ -26,7 +26,9 @@ describe('Producer', () => {
         topic.ensure = jest.fn();
         const producer = await new Producer(broker).withDurability(topic).connect();
         const key = await producer.produce({ x: 1 });
-        expect(sent[0].acks).toBe(-1);
+        // acks is a producer-level setting in the Confluent client (send() rejects it)
+        expect(broker.kafka.producer.mock.calls[0][0].kafkaJS.acks).toBe(-1);
+        expect(sent[0].acks).toBeUndefined();
         expect(sent[0].messages[0].headers['idempotency-key']).toBe(key);
         expect(await producer.produce({ x: 1 }, { idempotencyKey: 'abc' })).toBe('abc');
     });

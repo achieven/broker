@@ -1,8 +1,7 @@
 import { Producer } from '../src/producer/producer';
 import { IDEMPOTENCY_KEY_HEADER } from '../src/idempotency/idempotency-store';
-import { ConfigResourceTypes } from 'kafkajs';
 import { collect } from './helpers/collect';
-import { durableTopic, newBroker, plainTopic, startProxies, uniq, waitFor } from './helpers/cluster';
+import { docker, durableTopic, newBroker, plainTopic, startProxies, uniq, waitFor } from './helpers/cluster';
 import { ProxyGroup } from './helpers/proxy';
 
 const payloads: Record<string, any> = {
@@ -61,23 +60,20 @@ describe('Producer / Consumer round trip (real 3-broker cluster)', () => {
             await topic.ensure();
             const admin = broker().kafka.admin();
             await admin.connect();
-            const { topics } = await admin.fetchTopicMetadata({ topics: [topic.name] });
+            const topics = await admin.fetchTopicMetadata({ topics: [topic.name] });
             expect(topics[0].partitions.every((p) => p.replicas.length === 3)).toBe(true);
-            const { resources } = await admin.describeConfigs({
-                includeSynonyms: false,
-                resources: [{ type: ConfigResourceTypes.TOPIC, name: topic.name }],
-            });
-            const cfg = Object.fromEntries(resources[0].configEntries.map((e) => [e.configName, e.configValue]));
-            expect(cfg['min.insync.replicas']).toBe('2');
-            expect(cfg['unclean.leader.election.enable']).toBe('false');
             await admin.disconnect();
+            // the client has no describeConfigs: read the topic configs with the broker's own CLI
+            const out = docker(`exec broker-test-kafka1 /opt/kafka/bin/kafka-configs.sh --bootstrap-server localhost:9092 --describe --entity-type topics --entity-name ${topic.name}`);
+            expect(out).toMatch(/min\.insync\.replicas=2/);
+            expect(out).toMatch(/unclean\.leader\.election\.enable=false/);
         });
 
         it('refuse to be used when the topic already exists with weaker settings', async () => {
             const name = uniq('weak');
             const admin = broker().kafka.admin();
             await admin.connect();
-            await admin.createTopics({ topics: [{ topic: name, numPartitions: 1, replicationFactor: 1 }], waitForLeaders: false });
+            await admin.createTopics({ topics: [{ topic: name, numPartitions: 1, replicationFactor: 1 }]});
             await admin.disconnect();
 
             await expect(durableTopic(broker(), name).ensure()).rejects.toThrow(/not durable.*replication factor is 1.*min\.insync\.replicas/);
