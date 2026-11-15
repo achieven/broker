@@ -76,3 +76,18 @@ export async function readRaw(kafka: Kafka, topic: string, opts: { readUncommitt
 }
 
 export const docker = (cmd: string) => execSync(`docker ${cmd}`, { stdio: 'pipe' }).toString();
+
+/** Waits until the consumer group has a member with partitions assigned, i.e. it will actually receive new messages. */
+export async function waitForGroupStable(kafka: Kafka, groupId: string, timeoutMs = 90000) {
+    const admin = kafka.admin();
+    await admin.connect();
+    try {
+        await waitFor(async () => {
+            const { groups } = await admin.describeGroups([groupId]);
+            const g = groups[0];
+            return g?.state === 'Stable' && g.members.length > 0;
+        }, timeoutMs, `consumer group ${groupId} to become stable`);
+    } finally {
+        await admin.disconnect();
+    }
+}

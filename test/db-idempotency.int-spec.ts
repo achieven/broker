@@ -5,7 +5,7 @@ import { Consumer } from '../src/consumer/consumer';
 import { IdempotencyStore } from '../src/idempotency/idempotency-store';
 import { mongoIdempotencyStore } from '../src/idempotency/mongo-idempotency-store';
 import { mysqlIdempotencyStore } from '../src/idempotency/mysql-idempotency-store';
-import { newBroker, plainTopic, readRaw, sleep, startProxies, uniq, waitFor } from './helpers/cluster';
+import { newBroker, plainTopic, readRaw, sleep, startProxies, uniq, waitFor, waitForGroupStable } from './helpers/cluster';
 import { ProxyGroup } from './helpers/proxy';
 
 /** One adapter per database; the same scenarios run against both. */
@@ -78,7 +78,7 @@ describe.each([mongoBackend(), mysqlBackend()])('idempotency between the broker 
             await db.insert(ctx.idempotencyKey!, data);
         });
         await consumer.start();
-        return { calls, consumer };
+        return { calls, consumer, groupId };
     };
 
     it('the consumer creates a UNIQUE constraint on the key, enforced by the database itself', async () => {
@@ -124,10 +124,13 @@ describe.each([mongoBackend(), mysqlBackend()])('idempotency between the broker 
         let entered = 0;
         let release!: () => void;
         const bothEntered = new Promise<void>((r) => (release = r));
-        const barrier = async () => { if (++entered === 2) release(); await Promise.race([bothEntered, sleep(20000)]); };
+        const barrier = async () => { if (++entered === 2) release(); await Promise.race([bothEntered, sleep(60000)]); };
 
         const a = await worker(db, topic.name, uniq('A'), barrier);
         const b = await worker(db, topic.name, uniq('B'), barrier);
+        // start() returns before the group join finishes; on a slow runner the second consumer could still be joining
+        // when the event arrives, and then it would see the document already written and skip instead of racing.
+        await Promise.all([waitForGroupStable(broker.kafka, a.groupId), waitForGroupStable(broker.kafka, b.groupId)]);
         const key = await producer.produce({ n: 1 });
 
         const dlq = plainTopic(broker, `${topic.name}.dlq`);
