@@ -2,16 +2,11 @@ name: Node.js Package
 
 on:
   push:
-    branches: [main]
+    branches: ['**'] # tests run on every branch; only main publishes (see publish-gpr)
 
 # Least privilege by default; the publish job opts in to more below
 permissions:
   contents: read
-
-# Never run two publishes at once (avoids version races)
-concurrency:
-  group: publish-main
-  cancel-in-progress: false
 
 jobs:
   test:
@@ -22,7 +17,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           registry-url: https://npm.pkg.github.com/
           scope: '@achieven'
       # --ignore-scripts: a compromised dependency can't run install hooks
@@ -32,8 +27,38 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # referenced by the repo's .npmrc
       - run: npm test
 
+  # Real 3-broker Kafka + Mongo + MySQL via docker compose (test/docker-compose.yml); takes ~5 minutes.
+  integration-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://npm.pkg.github.com/
+          scope: '@achieven'
+      - run: npm ci --ignore-scripts
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: npm run test:integration
+      - name: Container logs (on failure)
+        if: failure()
+        run: docker compose -f test/docker-compose.yml logs --no-color --tail 200
+      - name: Tear down containers
+        if: always()
+        run: docker compose -f test/docker-compose.yml down -v
+
   publish-gpr:
-    needs: test
+    needs: [test, integration-test]
+    if: github.ref == 'refs/heads/main'
+    # Never run two publishes at once (avoids version races)
+    concurrency:
+      group: publish-main
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       contents: write # push the version bump commit + tag

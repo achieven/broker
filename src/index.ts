@@ -1,6 +1,11 @@
 export { BrokerModule } from './broker.module';
 export { BrokerService } from './broker.service';
 export { ProducerModule } from './producer/producer.module';
-export { ProducerService } from './producer/producer.service';
+export { Producer, ProduceOptions } from './producer/producer';
 export { ConsumerModule } from './consumer/consumer.module';
-export { ConsumerService } from './consumer/consumer.service';
+export { Consumer, MessageContext, MessageHandler } from './consumer/consumer';
+export { IDEMPOTENCY_KEY_HEADER, IdempotencyStore } from './idempotency/idempotency-store';
+export { mongoIdempotencyStore, MongoCollectionLike, MongoIdempotencyOptions } from './idempotency/mongo-idempotency-store';
+export { mysqlIdempotencyStore, SequelizeModelLike, MysqlIdempotencyOptions } from './idempotency/mysql-idempotency-store';
+export { TopicService, TopicOptions } from './topic/topic.service';
+export { DurableTopicService } from './topic/durable-topic.service';

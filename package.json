@@ -21,7 +21,8 @@
     "prepublishOnly": "npm run build",
     "test": "jest",
     "test:watch": "jest --watch",
-    "fullPublish": "git push -u origin main && npm run build && export GITHUB_TOKEN=${GITHUB_TOKEN} && npm publish"
+    "fullPublish": "git push -u origin main && npm run build && export GITHUB_TOKEN=${GITHUB_TOKEN} && npm publish",
+    "test:integration": "jest --config jest.integration.config.js"
   },
   "dependencies": {
     "kafkajs": "2.2.4"
@@ -36,7 +37,10 @@
     "@types/jest": "30.0.0",
     "@types/node": "22.20.1",
     "jest": "30.4.2",
+    "mongodb": "6.10.0",
+    "mysql2": "3.11.4",
     "reflect-metadata": "0.2.2",
+    "sequelize": "6.37.5",
     "ts-jest": "29.4.11",
     "typescript": "5.9.3"
   },

@@ -49,8 +49,14 @@ export abstract class TopicService {
                 replicationFactor: this.options.replicationFactor,
                 configEntries: Object.entries(this.options.configs).map(([name, value]) => ({ name, value })),
             };
-            await admin.createTopics({ topics: [topic], waitForLeaders: true });
-            await this.validate(admin);
+            // waitForLeaders:false - kafkajs' own wait throws UNKNOWN_TOPIC_OR_PARTITION on a multi-broker cluster whose
+            // metadata hasn't propagated yet; we do the waiting ourselves below.
+            await admin.createTopics({ topics: [topic], waitForLeaders: false });
+            // Right after creation, metadata may not have propagated to every broker yet; wait for it to become visible.
+            await retryWhileNotVisible(async () => {
+                await admin.fetchTopicMetadata({ topics: [this.name] });
+                await this.validate(admin);
+            });
         } finally {
             await admin.disconnect();
         }
@@ -75,5 +81,19 @@ export abstract class TopicService {
         const { topics } = await admin.fetchTopicMetadata({ topics: [this.name] });
         const partitions = topics[0]?.partitions ?? [];
         return Math.min(...partitions.map((p) => p.replicas.length));
+    }
+}
+
+const NOT_YET_VISIBLE = ['UNKNOWN_TOPIC_OR_PARTITION', 'LEADER_NOT_AVAILABLE', 'NOT_LEADER_FOR_PARTITION'];
+
+async function retryWhileNotVisible<T>(fn: () => Promise<T>, timeoutMs = 30000): Promise<T> {
+    const start = Date.now();
+    for (;;) {
+        try {
+            return await fn();
+        } catch (err: any) {
+            if (!NOT_YET_VISIBLE.includes(err?.type) || Date.now() - start > timeoutMs) throw err;
+            await new Promise((resolve) => setTimeout(resolve, 300));
+        }
     }
 }
