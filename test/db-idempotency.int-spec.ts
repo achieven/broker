@@ -124,7 +124,13 @@ describe.each([mongoBackend(), mysqlBackend()])('idempotency between the broker 
         let entered = 0;
         let release!: () => void;
         const bothEntered = new Promise<void>((r) => (release = r));
-        const barrier = async () => { if (++entered === 2) release(); await Promise.race([bothEntered, sleep(60000)]); };
+        const barrier = async () => {
+            if (++entered === 2) release();
+            let timer: NodeJS.Timeout;
+            const fallback = new Promise<void>((r) => (timer = setTimeout(r, 60000)));
+            await Promise.race([bothEntered, fallback]);
+            clearTimeout(timer!); // a leftover 60s timer would keep the Jest process alive after the run
+        };
 
         const a = await worker(db, topic.name, uniq('A'), barrier);
         const b = await worker(db, topic.name, uniq('B'), barrier);

@@ -9,5 +9,7 @@ module.exports = {
     testTimeout: 180000,
     setupFilesAfterEnv: ['<rootDir>/test/after-each.ts'],
     setupFiles: ['<rootDir>/test/quiet-logs.js'],
+    // kafkajs/driver sockets can outlive a test run; exit with the test result instead of hanging or crashing on a stray handle
+    forceExit: true,
     maxWorkers: 1, // suites share one cluster and one set of proxy ports
 };
