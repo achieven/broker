@@ -52,6 +52,33 @@ jobs:
         if: always()
         run: docker compose -f test/docker-compose.yml down -v
 
+  # Once unit + integration tests pass on a feature branch, open a PR into main (never merges it).
+  # Needs: repo Settings > Actions > General > "Allow GitHub Actions to create and approve pull requests".
+  open-pr:
+    needs: [test, integration-test]
+    if: github.ref_type == 'branch' && github.ref_name != 'main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # --fill reads the branch's commits to build the title and description
+          persist-credentials: false
+      - name: Open pull request if none is open for this branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          OPEN=$(gh pr list --head "$BRANCH" --base main --state open --json number --jq length)
+          if [ "$OPEN" != "0" ]; then
+            echo "A pull request for $BRANCH is already open, nothing to do"
+          else
+            gh pr create --base main --head "$BRANCH" --fill
+          fi
+
   publish-gpr:
     needs: [test, integration-test]
     if: github.ref == 'refs/heads/main'

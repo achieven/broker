@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { hostname } from 'node:os';
 import { CompressionTypes, Producer as KafkaProducer, ProducerConfig } from 'kafkajs';
 import { BrokerService } from '../broker.service';
 import { IDEMPOTENCY_KEY_HEADER } from '../idempotency/idempotency-store';
 import { DurableTopicService } from '../topic/durable-topic.service';
 import { TopicService } from '../topic/topic.service';
+import { instanceId, liveTransactionalIds } from './transactional-id';
 
 export interface ProduceOptions {
     /** Reuse an existing correlation id (e.g. when forwarding an event). A fresh UUID is generated when omitted. */
@@ -25,9 +25,6 @@ export interface TransactionOptions {
 export interface ProducerTransaction {
     produce(message: any, options?: TransactionalProduceOptions): Promise<string>;
 }
-
-/** A transactional id fences every other producer using it, so two live producers in one process must not share one. */
-const liveTransactionalIds = new Set<string>();
 
 /**
  * Composable producer:  `new Producer(broker).withDurability(ordersTopic)`  or  `new Producer(broker).withTopic('x')`.
@@ -223,6 +220,5 @@ function topicName(topic: string | TopicService): string {
 }
 
 function defaultTransactionalId(topic: string): string {
-    const instance = process.env.PRODUCER_INSTANCE_ID || process.env.HOSTNAME || hostname();
-    return `tx-${topic}-${instance}`;
+    return `tx-${topic}-${instanceId()}`;
 }

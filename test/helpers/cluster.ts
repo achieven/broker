@@ -87,7 +87,7 @@ export async function countRecords(kafka: Kafka, topic: string): Promise<number>
 /** Reads a topic from the beginning with a raw kafkajs consumer (no idempotency logic) until `count` records arrived or idle. */
 export async function readRaw(kafka: Kafka, topic: string, opts: { readUncommitted?: boolean; idleMs?: number } = {}) {
     const consumer = kafka.consumer({ groupId: uniq('raw'), readUncommitted: opts.readUncommitted ?? true });
-    const got: Array<{ value: string | undefined; headers: Record<string, string> }> = [];
+    const got: Array<{ key: string | undefined; value: string | undefined; headers: Record<string, string> }> = [];
     let last = Date.now();
     await consumer.connect();
     await consumer.subscribe({ topic, fromBeginning: true });
@@ -96,7 +96,7 @@ export async function readRaw(kafka: Kafka, topic: string, opts: { readUncommitt
             last = Date.now();
             const headers: Record<string, string> = {};
             for (const [k, v] of Object.entries(message.headers ?? {})) headers[k] = String(v);
-            got.push({ value: message.value?.toString(), headers });
+            got.push({ key: message.key?.toString(), value: message.value?.toString(), headers });
         },
     });
     await sleep(2000); // join the group
@@ -117,6 +117,18 @@ export async function waitForGroupStable(kafka: Kafka, groupId: string, timeoutM
             const g = groups[0];
             return g?.state === 'Stable' && g.members.length > 0;
         }, timeoutMs, `consumer group ${groupId} to become stable`);
+    } finally {
+        await admin.disconnect();
+    }
+}
+
+/** The offset the group has committed for a partition: the NEXT offset to read, or -1 if nothing was ever committed. */
+export async function committedOffset(kafka: Kafka, groupId: string, topic: string, partition = 0): Promise<number> {
+    const admin = kafka.admin();
+    await admin.connect();
+    try {
+        const [t] = await admin.fetchOffsets({ groupId, topics: [topic] });
+        return Number(t.partitions.find((p) => p.partition === partition)?.offset ?? -1);
     } finally {
         await admin.disconnect();
     }
