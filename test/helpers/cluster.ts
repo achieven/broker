@@ -1,0 +1,78 @@
+import { execSync } from 'child_process';
+import { randomUUID } from 'crypto';
+import { Kafka } from 'kafkajs';
+import { BrokerService } from '../../src/broker.service';
+import { TopicService } from '../../src/topic/topic.service';
+import { DurableTopicService } from '../../src/topic/durable-topic.service';
+import { ProxyGroup } from './proxy';
+
+export const PROXY_BOOTSTRAP_PORT = 49092;
+
+/** brokers 1..3: clients connect to 4909x (proxy) -> 3909x (docker published port) -> broker */
+export function startProxies() {
+    const group = new ProxyGroup([[49092, 39092], [49093, 39093], [49094, 39094]]);
+    return group.start().then(() => group);
+}
+
+export function newBroker(): BrokerService {
+    process.env.BROKER_HOST = 'localhost';
+    process.env.BROKER_PORT = String(PROXY_BOOTSTRAP_PORT);
+    return new BrokerService();
+}
+
+export const uniq = (prefix: string) => `${prefix}-${randomUUID().slice(0, 8)}`;
+
+export class PlainTopic extends TopicService {}
+export class StrongTopic extends DurableTopicService {}
+
+export const plainTopic = (broker: BrokerService, name = uniq('plain'), numPartitions = 1) =>
+    new PlainTopic(broker, name, { numPartitions });
+export const durableTopic = (broker: BrokerService, name = uniq('durable'), numPartitions = 1) =>
+    new StrongTopic(broker, name, { numPartitions });
+
+export async function waitFor<T>(fn: () => T | Promise<T>, timeoutMs = 60000, what = 'condition'): Promise<NonNullable<T>> {
+    const start = Date.now();
+    for (;;) {
+        const v = await fn();
+        if (v) return v as NonNullable<T>;
+        if (Date.now() - start > timeoutMs) throw new Error(`Timed out waiting for ${what}`);
+        await new Promise((r) => setTimeout(r, 200));
+    }
+}
+
+export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Number of records physically in the topic (high - low watermark, all partitions). Non-transactional topics only. */
+export async function countRecords(kafka: Kafka, topic: string): Promise<number> {
+    const admin = kafka.admin();
+    await admin.connect();
+    try {
+        const offsets = await admin.fetchTopicOffsets(topic);
+        return offsets.reduce((n, p) => n + (Number(p.high) - Number(p.low)), 0);
+    } finally {
+        await admin.disconnect();
+    }
+}
+
+/** Reads a topic from the beginning with a raw kafkajs consumer (no idempotency logic) until `count` records arrived or idle. */
+export async function readRaw(kafka: Kafka, topic: string, opts: { readUncommitted?: boolean; idleMs?: number } = {}) {
+    const consumer = kafka.consumer({ groupId: uniq('raw'), readUncommitted: opts.readUncommitted ?? true });
+    const got: Array<{ value: string | undefined; headers: Record<string, string> }> = [];
+    let last = Date.now();
+    await consumer.connect();
+    await consumer.subscribe({ topic, fromBeginning: true });
+    await consumer.run({
+        eachMessage: async ({ message }) => {
+            last = Date.now();
+            const headers: Record<string, string> = {};
+            for (const [k, v] of Object.entries(message.headers ?? {})) headers[k] = String(v);
+            got.push({ value: message.value?.toString(), headers });
+        },
+    });
+    await sleep(2000); // join the group
+    while (Date.now() - last < (opts.idleMs ?? 3000)) await sleep(250);
+    await consumer.disconnect();
+    return got;
+}
+
+export const docker = (cmd: string) => execSync(`docker ${cmd}`, { stdio: 'pipe' }).toString();
