@@ -63,3 +63,43 @@ export class ProxyGroup {
     async start() { await Promise.all(this.proxies.map((p) => p.start())); }
     async stop() { await Promise.all(this.proxies.map((p) => p.stop())); }
 }
+
+/**
+ * Plain TCP proxy used to simulate a database outage: `pause()` kills every open connection and refuses new ones
+ * (ECONNREFUSED), `resume()` lets traffic through again.
+ */
+export class TcpProxy {
+    private server?: net.Server;
+    private sockets = new Set<net.Socket>();
+
+    constructor(private readonly listenPort: number, private readonly targetPort: number) {}
+
+    async start(): Promise<void> {
+        this.server = net.createServer((client) => {
+            const upstream = net.connect(this.targetPort, '127.0.0.1');
+            this.sockets.add(client).add(upstream);
+            const closeBoth = () => { client.destroy(); upstream.destroy(); this.sockets.delete(client); this.sockets.delete(upstream); };
+            client.on('error', closeBoth); upstream.on('error', closeBoth);
+            client.on('close', closeBoth); upstream.on('close', closeBoth);
+            client.pipe(upstream);
+            upstream.pipe(client);
+        });
+        await new Promise<void>((resolve) => this.server!.listen(this.listenPort, '127.0.0.1', resolve));
+    }
+
+    async pause(): Promise<void> {
+        const server = this.server!;
+        this.server = undefined;
+        this.sockets.forEach((s) => s.destroy());
+        this.sockets.clear();
+        await new Promise((resolve) => server.close(resolve));
+    }
+
+    resume(): Promise<void> {
+        return this.start();
+    }
+
+    async stop(): Promise<void> {
+        if (this.server) await this.pause();
+    }
+}

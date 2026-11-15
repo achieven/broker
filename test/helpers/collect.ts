@@ -9,6 +9,12 @@ export async function stopAllConsumers() {
     await Promise.all(started.splice(0).map((c) => c.stop().catch(() => {})));
 }
 
+/** Registers a consumer so that afterEach stops it (stopping twice is harmless). */
+export function track<T extends Consumer>(consumer: T): T {
+    started.push(consumer);
+    return consumer;
+}
+
 export interface Received { data: any; ctx: MessageContext }
 
 /** Starts a Consumer on `topic` (optionally customised through `configure`) that records everything it is handed. */
