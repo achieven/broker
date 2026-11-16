@@ -315,7 +315,6 @@ export class Consumer {
 
     private async handleMessage({ topic, partition, message, heartbeat }: KafkaJS.EachMessagePayload, dlqTopic: string): Promise<void> {
         if (this.stopped) return;
-        console.log('Received message:', message.value?.toString());
         if (!(await this.waitWhileHalted(heartbeat))) return;
 
         const meta: MessageMeta = { topic, partition, offset: message.offset };
