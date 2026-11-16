@@ -70,7 +70,7 @@ export class Consumer {
     private topic?: string;
     private handler?: RecordHandler;
     private readUncommitted = true;
-    private fromBeginning = false;
+    private fromBeginning = true;
     private store?: IdempotencyStore;
     private policy?: IdempotencyPolicy;
     private dlqTopic?: string;
