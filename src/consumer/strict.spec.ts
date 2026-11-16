@@ -22,7 +22,7 @@ function fake() {
             }),
         })),
         consumer: jest.fn((_config?: any) => ({
-            connect: jest.fn(), disconnect: jest.fn(), subscribe: jest.fn(),
+            connect: jest.fn(), disconnect: jest.fn(), subscribe: jest.fn(), assignment: jest.fn(() => [{ topic: 't', partition: 0 }]),
             commitOffsets: jest.fn(async (o) => { commits.push(...o); }),
             run: jest.fn(async (o) => { each = o.eachMessage; (kafka as any).runOptions = o; }),
         })),

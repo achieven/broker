@@ -60,7 +60,7 @@ describe('Producer / Consumer round trip (real 3-broker cluster)', () => {
             await topic.ensure();
             const admin = broker().kafka.admin();
             await admin.connect();
-            const topics = await admin.fetchTopicMetadata({ topics: [topic.name] });
+            const topics = await admin.fetchTopicMetadata({ topics: [topic.name], timeout: 30000 });
             expect(topics[0].partitions.every((p) => p.replicas.length === 3)).toBe(true);
             await admin.disconnect();
             // the client has no describeConfigs: read the topic configs with the broker's own CLI
@@ -76,7 +76,9 @@ describe('Producer / Consumer round trip (real 3-broker cluster)', () => {
             await admin.createTopics({ topics: [{ topic: name, numPartitions: 1, replicationFactor: 1 }]});
             await admin.disconnect();
 
-            await expect(durableTopic(broker(), name).ensure()).rejects.toThrow(/not durable.*replication factor is 1.*min\.insync\.replicas/);
+            await expect(durableTopic(broker(), name).ensure()).rejects.toThrow(/not durable.*replication factor is 1/);
+            // BACKLOG: the Confluent client has no describeConfigs, so the weak min.insync.replicas of an existing topic is no
+            // longer reported here; add `.*min\.insync\.replicas` back once it can be read (see durable-topic.service.ts).
             await expect(new Producer(broker()).withDurability(durableTopic(broker(), name)).connect()).rejects.toThrow(/not durable/);
         });
     });

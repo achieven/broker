@@ -281,7 +281,22 @@ export class Consumer {
             ...(this.concurrency ? { partitionsConsumedConcurrently: this.concurrency } : {}),
             eachMessage: (payload) => this.handleMessage(payload, dlqTopic),
         });
+        await this.waitForAssignment();
         return this;
+    }
+
+    /**
+     * kafkajs' run() resolved once the consumer had joined the group; the Confluent client's resolves right away.
+     * Wait (bounded) for the first partition assignment so start() keeps meaning "ready": with fromBeginning=false a
+     * message sent right after start() must not be skipped. A member with no partitions (more consumers than
+     * partitions) just proceeds after the cap.
+     */
+    private async waitForAssignment(timeoutMs = 10000): Promise<void> {
+        const end = Date.now() + timeoutMs;
+        while (!this.stopped && Date.now() < end) {
+            if (this.consumer!.assignment().length > 0) return;
+            await this.nap(100);
+        }
     }
 
     async stop() {

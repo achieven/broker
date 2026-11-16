@@ -10,7 +10,7 @@ function fakeBroker() {
     const kafka: any = {
         producer: jest.fn(() => ({ connect: jest.fn(), disconnect: jest.fn(), send: jest.fn(async (r) => { sent.push(r); }) })),
         consumer: jest.fn(() => ({
-            connect: jest.fn(), disconnect: jest.fn(), subscribe: jest.fn(),
+            connect: jest.fn(), disconnect: jest.fn(), subscribe: jest.fn(), assignment: jest.fn(() => [{ topic: 't', partition: 0 }]),
             run: jest.fn(async (o) => { eachMessage = o.eachMessage; }),
         })),
     };

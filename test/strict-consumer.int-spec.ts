@@ -295,7 +295,9 @@ describe('strict consumer', () => {
         const makeConsumer = crashing.kafka.consumer.bind(crashing.kafka);
         crashing.kafka.consumer = ((config: any) => {
             const c = makeConsumer(config);
-            return overriding(c, { commitOffsets: async () => { throw new KafkaJS.KafkaJSError('process died before commit'); } });
+            // kafkajs crashed the consumer when this threw; the Confluent client would just redeliver the message to the same
+            // (still alive) consumer, which is not a dead process. So kill the consumer for real: it never commits.
+            return overriding(c, { commitOffsets: async () => { void c.disconnect().catch(() => {}); throw new KafkaJS.KafkaJSError('process died before commit'); } });
         }) as any;
         const a = track(new Consumer(crashing)).withGroupId(groupId).withTopic(topic).withStrictProcessing().withMysqlClassifier()
             .onRecord(async (m) => { handledBy.push(`A@${m.meta.offset}`); await insert(m); });
@@ -343,7 +345,7 @@ describe('strict consumer', () => {
             // still a live, stable group member: heartbeats are flowing, so no rebalance
             const admin = broker.kafka.admin();
             await admin.connect();
-            const { groups } = await admin.describeGroups([groupId]);
+            const { groups } = await admin.describeGroups([groupId], { timeout: 30000 });
             await admin.disconnect();
             expect(groups[0]).toMatchObject({ state: KafkaJS.ConsumerGroupStates.STABLE });
             expect(groups[0].members).toHaveLength(1);
@@ -390,11 +392,12 @@ describe('strict consumer', () => {
         const partitions = 4;
         const { topic } = await topics(partitions);
         const { consumer, groupId } = strictConsumer(topic);
-        let running = 0, maxRunning = 0;
+        let running = 0, maxRunning = 0, firstStart = 0;
         const perPartition = new Map<number, { running: number; overlapped: boolean; order: number[] }>();
         await consumer.withPartitionConcurrency(partitions).onRecord(async (m) => {
             const st = perPartition.get(m.meta.partition) ?? { running: 0, overlapped: false, order: [] };
             perPartition.set(m.meta.partition, st);
+            firstStart ||= Date.now();
             st.running++; running++; maxRunning = Math.max(maxRunning, running);
             if (st.running > 1) st.overlapped = true;
             st.order.push(Number(m.meta.offset));
@@ -404,13 +407,13 @@ describe('strict consumer', () => {
 
         const messages: Array<{ partition: number; value: string }> = [];
         for (let p = 0; p < partitions; p++) for (let i = 0; i < 3; i++) messages.push({ partition: p, value: json({ msgId: uniq('m'), i }) });
-        const t0 = Date.now();
         await send(topic, messages);
         await waitFor(() => [...perPartition.values()].reduce((n, s) => n + s.order.length, 0) === partitions * 3, 60000, 'all messages');
         await waitFor(() => running === 0, 10000, 'handlers to finish');
 
         expect(maxRunning).toBeGreaterThanOrEqual(3);                              // different partitions overlapped
-        expect(Date.now() - t0).toBeLessThan(partitions * 3 * 1200 * 0.6);         // far faster than serial
+        // measured from the first handler call, so producer connect/init and group join are not counted
+        expect(Date.now() - firstStart).toBeLessThan(partitions * 3 * 1200 * 0.6);  // far faster than serial
         for (const st of perPartition.values()) {
             expect(st.overlapped).toBe(false);                                     // never two at once in one partition
             expect(st.order).toEqual([...st.order].sort((x, y) => x - y));         // offsets in order

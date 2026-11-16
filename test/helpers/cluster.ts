@@ -72,7 +72,7 @@ export async function countRecords(kafka: KafkaJS.Kafka, topic: string): Promise
     const admin = kafka.admin();
     await admin.connect();
     try {
-        const offsets = await admin.fetchTopicOffsets(topic);
+        const offsets = await admin.fetchTopicOffsets(topic, { timeout: 30000, isolationLevel: KafkaJS.IsolationLevel.READ_UNCOMMITTED });
         return offsets.reduce((n, p) => n + (Number(p.high) - Number(p.low)), 0);
     } finally {
         await admin.disconnect();
@@ -108,7 +108,7 @@ export async function waitForGroupStable(kafka: KafkaJS.Kafka, groupId: string, 
     await admin.connect();
     try {
         await waitFor(async () => {
-            const { groups } = await admin.describeGroups([groupId]);
+            const { groups } = await admin.describeGroups([groupId], { timeout: 30000 }); // admin calls default to 5 s; a fresh connection through the proxies can be slower
             const g = groups[0];
             return g?.state === KafkaJS.ConsumerGroupStates.STABLE && g.members.length > 0;
         }, timeoutMs, `consumer group ${groupId} to become stable`);
@@ -122,8 +122,10 @@ export async function committedOffset(kafka: KafkaJS.Kafka, groupId: string, top
     const admin = kafka.admin();
     await admin.connect();
     try {
-        const [t] = await admin.fetchOffsets({ groupId, topics: [topic] });
-        const offset = Number(t.partitions.find((p) => p.partition === partition)?.offset ?? -1);
+        // a fresh admin connection through the proxies can need more than the 5 s default; and a group that never
+        // committed gets no entry at all (kafkajs returned -1 entries)
+        const [t] = await admin.fetchOffsets({ groupId, topics: [topic], timeout: 30000 });
+        const offset = Number(t?.partitions.find((p) => p.partition === partition)?.offset ?? -1);
         return offset < 0 ? -1 : offset; // librdkafka reports "no committed offset" as a negative sentinel
     } finally {
         await admin.disconnect();
