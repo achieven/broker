@@ -1,6 +1,6 @@
 import { execSync } from 'child_process';
 import { randomUUID } from 'crypto';
-import { Kafka } from 'kafkajs';
+import { KafkaJS } from '@confluentinc/kafka-javascript';
 import { BrokerService } from '../../src/broker.service';
 import { TopicService } from '../../src/topic/topic.service';
 import { DurableTopicService } from '../../src/topic/durable-topic.service';
@@ -26,11 +26,6 @@ export function newBroker(): BrokerService {
     for (const factory of ['producer', 'consumer', 'admin']) {
         const original = kafka[factory].bind(kafka);
         kafka[factory] = (...args: any[]) => {
-            if (factory === 'consumer') {
-                // kafkajs restarts crashed consumers by default, even after disconnect(); in tests a crash must stay a crash
-                const config = args[0] ?? {};
-                args[0] = { ...config, retry: { restartOnFailure: async () => false, ...config.retry } };
-            }
             const client = original(...args);
             clients.push(client);
             return client;
@@ -40,7 +35,7 @@ export function newBroker(): BrokerService {
 }
 
 /**
- * A kafkajs client that outlives its test file keeps running inside the shared Jest process, and its next lazy
+ * A Kafka client that outlives its test file keeps running inside the shared Jest process, and its next lazy
  * `require` makes Jest print "You are trying to `require` a file after the Jest environment has been torn down" and
  * set exit code 1, even though every test passed. So every file ends by disconnecting everything it created.
  */
@@ -73,24 +68,24 @@ export async function waitFor<T>(fn: () => T | Promise<T>, timeoutMs = 60000, wh
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Number of records physically in the topic (high - low watermark, all partitions). Non-transactional topics only. */
-export async function countRecords(kafka: Kafka, topic: string): Promise<number> {
+export async function countRecords(kafka: KafkaJS.Kafka, topic: string): Promise<number> {
     const admin = kafka.admin();
     await admin.connect();
     try {
-        const offsets = await admin.fetchTopicOffsets(topic);
+        const offsets = await admin.fetchTopicOffsets(topic, { timeout: 30000, isolationLevel: KafkaJS.IsolationLevel.READ_UNCOMMITTED });
         return offsets.reduce((n, p) => n + (Number(p.high) - Number(p.low)), 0);
     } finally {
         await admin.disconnect();
     }
 }
 
-/** Reads a topic from the beginning with a raw kafkajs consumer (no idempotency logic) until `count` records arrived or idle. */
-export async function readRaw(kafka: Kafka, topic: string, opts: { readUncommitted?: boolean; idleMs?: number } = {}) {
-    const consumer = kafka.consumer({ groupId: uniq('raw'), readUncommitted: opts.readUncommitted ?? true });
+/** Reads a topic from the beginning with a raw consumer (no idempotency logic) until `count` records arrived or idle. */
+export async function readRaw(kafka: KafkaJS.Kafka, topic: string, opts: { readUncommitted?: boolean; idleMs?: number } = {}) {
+    const consumer = kafka.consumer({ kafkaJS: { groupId: uniq('raw'), readUncommitted: opts.readUncommitted ?? true, fromBeginning: true } });
     const got: Array<{ key: string | undefined; value: string | undefined; headers: Record<string, string> }> = [];
     let last = Date.now();
     await consumer.connect();
-    await consumer.subscribe({ topic, fromBeginning: true });
+    await consumer.subscribe({ topic });
     await consumer.run({
         eachMessage: async ({ message }) => {
             last = Date.now();
@@ -108,14 +103,14 @@ export async function readRaw(kafka: Kafka, topic: string, opts: { readUncommitt
 export const docker = (cmd: string) => execSync(`docker ${cmd}`, { stdio: 'pipe' }).toString();
 
 /** Waits until the consumer group has a member with partitions assigned, i.e. it will actually receive new messages. */
-export async function waitForGroupStable(kafka: Kafka, groupId: string, timeoutMs = 90000) {
+export async function waitForGroupStable(kafka: KafkaJS.Kafka, groupId: string, timeoutMs = 90000) {
     const admin = kafka.admin();
     await admin.connect();
     try {
         await waitFor(async () => {
-            const { groups } = await admin.describeGroups([groupId]);
+            const { groups } = await admin.describeGroups([groupId], { timeout: 30000 }); // admin calls default to 5 s; a fresh connection through the proxies can be slower
             const g = groups[0];
-            return g?.state === 'Stable' && g.members.length > 0;
+            return g?.state === KafkaJS.ConsumerGroupStates.STABLE && g.members.length > 0;
         }, timeoutMs, `consumer group ${groupId} to become stable`);
     } finally {
         await admin.disconnect();
@@ -123,12 +118,15 @@ export async function waitForGroupStable(kafka: Kafka, groupId: string, timeoutM
 }
 
 /** The offset the group has committed for a partition: the NEXT offset to read, or -1 if nothing was ever committed. */
-export async function committedOffset(kafka: Kafka, groupId: string, topic: string, partition = 0): Promise<number> {
+export async function committedOffset(kafka: KafkaJS.Kafka, groupId: string, topic: string, partition = 0): Promise<number> {
     const admin = kafka.admin();
     await admin.connect();
     try {
-        const [t] = await admin.fetchOffsets({ groupId, topics: [topic] });
-        return Number(t.partitions.find((p) => p.partition === partition)?.offset ?? -1);
+        // a fresh admin connection through the proxies can need more than the 5 s default; and a group that never
+        // committed gets no entry at all (kafkajs returned -1 entries)
+        const [t] = await admin.fetchOffsets({ groupId, topics: [topic], timeout: 30000 });
+        const offset = Number(t?.partitions.find((p) => p.partition === partition)?.offset ?? -1);
+        return offset < 0 ? -1 : offset; // librdkafka reports "no committed offset" as a negative sentinel
     } finally {
         await admin.disconnect();
     }

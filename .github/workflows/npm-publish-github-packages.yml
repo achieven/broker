@@ -25,6 +25,8 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # referenced by the repo's .npmrc
+      # The Kafka client is native: run the install script of this one package only (downloads the prebuilt binding, else compiles it)
+      - run: npm rebuild @confluentinc/kafka-javascript
       - run: npm test
 
   # Real 3-broker Kafka + Mongo + MySQL via docker compose (test/docker-compose.yml); takes ~5 minutes.
@@ -44,6 +46,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: npm rebuild @confluentinc/kafka-javascript # native binding, see the unit-test job
       - run: npm run test:integration
       - name: Container logs (on failure)
         if: failure()

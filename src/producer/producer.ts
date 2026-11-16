@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { CompressionTypes, Producer as KafkaProducer, ProducerConfig } from 'kafkajs';
+import { KafkaJS } from '@confluentinc/kafka-javascript';
 import { BrokerService } from '../broker.service';
 import { IDEMPOTENCY_KEY_HEADER } from '../idempotency/idempotency-store';
 import { DurableTopicService } from '../topic/durable-topic.service';
@@ -32,14 +32,12 @@ export interface ProducerTransaction {
  */
 export class Producer {
     private topic?: string | TopicService;
-    private config: ProducerConfig = {};
-    private acks: -1 | 0 | 1 = 1;
-    private sendTimeout?: number;
+    private config: KafkaJS.ProducerConfig = { acks: 1, compression: KafkaJS.CompressionTypes.None };
     private transactional?: TransactionOptions;
     private activeTransactionalId?: string;
-    private producer?: KafkaProducer;
+    private producer?: KafkaJS.Producer;
     private connected = false;
-    private queue: Promise<unknown> = Promise.resolve(); // a kafkajs producer runs one transaction at a time
+    private queue: Promise<unknown> = Promise.resolve(); // a producer runs one transaction at a time
 
     constructor(private readonly broker: BrokerService) {}
 
@@ -55,10 +53,10 @@ export class Producer {
      */
     withIdempotence(): this {
         this.assertNotConnected();
-        this.acks = -1;
-        this.sendTimeout = 30000;
         this.config = {
             ...this.config,
+            acks: -1,
+            timeout: 30000,
             idempotent: true,
             maxInFlightRequests: 1,
             retry: { retries: 20, initialRetryTime: 300, maxRetryTime: 30000 },
@@ -118,7 +116,7 @@ export class Producer {
         }
 
         try {
-            this.producer = this.broker.kafka.producer(config);
+            this.producer = this.broker.kafka.producer({ kafkaJS: config });
             await this.producer.connect();
         } catch (err) {
             this.releaseTransactionalId();
@@ -147,9 +145,6 @@ export class Producer {
         }
         await producer.send({
             topic: topicName(topic),
-            acks: this.acks,
-            ...(this.sendTimeout ? { timeout: this.sendTimeout } : {}),
-            compression: CompressionTypes.None,
             messages: [this.toRecord(message, idempotencyKey)],
         });
         return idempotencyKey;
@@ -173,8 +168,6 @@ export class Producer {
                         if (typeof target !== 'string') await target.ensure();
                         await tx.send({
                             topic: topicName(target),
-                            acks: -1,
-                            compression: CompressionTypes.None,
                             messages: [this.toRecord(message, idempotencyKey)],
                         });
                         return idempotencyKey;

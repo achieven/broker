@@ -1,4 +1,4 @@
-import { Admin, ITopicConfig, ConfigResourceTypes } from 'kafkajs';
+import { KafkaJS } from '@confluentinc/kafka-javascript';
 import { BrokerService } from '../broker.service';
 
 export interface TopicOptions {
@@ -11,6 +11,8 @@ export interface TopicOptions {
 export abstract class TopicService {
     protected readonly options: Required<TopicOptions>;
     private ensured?: Promise<void>;
+    /** True when the last ensure() created the topic (so its configs are exactly the ones requested), false when it pre-existed. */
+    protected created = false;
 
     constructor(
         protected readonly brokerService: BrokerService,
@@ -43,15 +45,15 @@ export abstract class TopicService {
         const admin = this.brokerService.kafka.admin();
         await admin.connect();
         try {
-            const topic: ITopicConfig = {
+            const topic: KafkaJS.ITopicConfig = {
                 topic: this.name,
                 numPartitions: this.options.numPartitions,
                 replicationFactor: this.options.replicationFactor,
                 configEntries: Object.entries(this.options.configs).map(([name, value]) => ({ name, value })),
             };
-            // waitForLeaders:false - kafkajs' own wait throws UNKNOWN_TOPIC_OR_PARTITION on a multi-broker cluster whose
-            // metadata hasn't propagated yet; we do the waiting ourselves below.
-            await admin.createTopics({ topics: [topic], waitForLeaders: false });
+            // true = created now, false = it already existed. We don't wait for leaders in createTopics; we do the
+            // waiting ourselves below, because metadata may not have propagated to every broker yet.
+            this.created = await admin.createTopics({ topics: [topic] });
             // Right after creation, metadata may not have propagated to every broker yet; wait for it to become visible.
             await retryWhileNotVisible(async () => {
                 await admin.fetchTopicMetadata({ topics: [this.name] });
@@ -63,28 +65,21 @@ export abstract class TopicService {
     }
 
     /** Hook: throw if the (possibly pre-existing) topic doesn't meet requirements. */
-    protected async validate(_admin: Admin): Promise<void> {}
+    protected async validate(_admin: KafkaJS.Admin): Promise<void> {}
 
-    protected async getTopicConfigs(admin: Admin): Promise<Record<string, string>> {
-        const { resources } = await admin.describeConfigs({
-            includeSynonyms: false,
-            resources: [{ type: ConfigResourceTypes.TOPIC, name: this.name }],
-        });
-        const result: Record<string, string> = {};
-        for (const entry of resources[0]?.configEntries ?? []) {
-            result[entry.configName] = entry.configValue;
-        }
-        return result;
-    }
-
-    protected async getMinReplicationFactor(admin: Admin): Promise<number> {
-        const { topics } = await admin.fetchTopicMetadata({ topics: [this.name] });
+    protected async getMinReplicationFactor(admin: KafkaJS.Admin): Promise<number> {
+        const topics = await admin.fetchTopicMetadata({ topics: [this.name] });
         const partitions = topics[0]?.partitions ?? [];
         return Math.min(...partitions.map((p) => p.replicas.length));
     }
 }
 
-const NOT_YET_VISIBLE = ['UNKNOWN_TOPIC_OR_PARTITION', 'LEADER_NOT_AVAILABLE', 'NOT_LEADER_FOR_PARTITION'];
+const NOT_YET_VISIBLE_TYPES = ['UNKNOWN_TOPIC_OR_PARTITION', 'LEADER_NOT_AVAILABLE', 'NOT_LEADER_FOR_PARTITION'];
+const NOT_YET_VISIBLE_CODES: number[] = [
+    KafkaJS.ErrorCodes.ERR_UNKNOWN_TOPIC_OR_PART,
+    KafkaJS.ErrorCodes.ERR_LEADER_NOT_AVAILABLE,
+    KafkaJS.ErrorCodes.ERR_NOT_LEADER_FOR_PARTITION,
+];
 
 async function retryWhileNotVisible<T>(fn: () => Promise<T>, timeoutMs = 30000): Promise<T> {
     const start = Date.now();
@@ -92,7 +87,7 @@ async function retryWhileNotVisible<T>(fn: () => Promise<T>, timeoutMs = 30000):
         try {
             return await fn();
         } catch (err: any) {
-            if (!NOT_YET_VISIBLE.includes(err?.type) || Date.now() - start > timeoutMs) throw err;
+            if (!(NOT_YET_VISIBLE_TYPES.includes(err?.type) || NOT_YET_VISIBLE_CODES.includes(err?.code)) || Date.now() - start > timeoutMs) throw err;
             await new Promise((resolve) => setTimeout(resolve, 300));
         }
     }

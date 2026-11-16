@@ -1,6 +1,6 @@
 import { Consumer, ConsumerEvent } from './consumer';
 
-/** Fake kafkajs: records commits and DLQ transactions, lets a test deliver messages to eachMessage. */
+/** Fake Confluent KafkaJS-compat client: records commits and DLQ transactions, lets a test deliver messages to eachMessage. */
 function fake() {
     const commits: any[] = [];
     const dlq: any[] = [];
@@ -8,7 +8,7 @@ function fake() {
     let each: any;
     const hooks = { failTx: false };
     const kafka = {
-        producer: jest.fn(() => ({
+        producer: jest.fn((_config?: any) => ({
             connect: jest.fn(), disconnect: jest.fn(),
             send: jest.fn(async (r) => { dlq.push(r); }),
             transaction: jest.fn(async () => {
@@ -21,8 +21,8 @@ function fake() {
                 };
             }),
         })),
-        consumer: jest.fn(() => ({
-            connect: jest.fn(), disconnect: jest.fn(), subscribe: jest.fn(),
+        consumer: jest.fn((_config?: any) => ({
+            connect: jest.fn(), disconnect: jest.fn(), subscribe: jest.fn(), assignment: jest.fn(() => [{ topic: 't', partition: 0 }]),
             commitOffsets: jest.fn(async (o) => { commits.push(...o); }),
             run: jest.fn(async (o) => { each = o.eachMessage; (kafka as any).runOptions = o; }),
         })),
@@ -50,7 +50,7 @@ describe('strict consumer (unit)', () => {
         const handler = jest.fn(async () => { expect(f.commits).toHaveLength(0); }); // not before
         const { consumer } = strict(f, handler);
         await consumer.start(); await f.deliver('{"a":1}', '41');
-        expect((f.kafka as any).runOptions.autoCommit).toBe(false);
+        expect(f.kafka.consumer.mock.calls[0][0].kafkaJS.autoCommit).toBe(false);
         expect(f.commits).toEqual([{ topic: 't', partition: 2, offset: '42' }]);
     });
 
@@ -61,10 +61,10 @@ describe('strict consumer (unit)', () => {
         await consumer.start(); await f.deliver('{"a":1}', '9');
         expect(handler).toHaveBeenCalledTimes(1);
         expect(f.dlq[0].topic).toBe('t.dlq');
-        expect(f.dlq[0].acks).toBe(-1);
+        expect(f.kafka.producer.mock.calls[0][0].kafkaJS).toMatchObject({ transactionalId: expect.any(String), acks: -1, idempotent: true });
         expect(f.dlq[0].messages[0].headers).toMatchObject({ 'x-error-class': 'permanent', 'x-source-offset': '9', 'x-source-partition': '2', 'x-stage': 'g' });
         expect(f.dlq[0].messages[0].key.toString()).toBe('k');
-        expect(f.txOffsets[0]).toEqual({ consumerGroupId: 'g', topics: [{ topic: 't', partitions: [{ partition: 2, offset: '10' }] }] });
+        expect(f.txOffsets[0]).toEqual({ consumer: f.kafka.consumer.mock.results[0].value, topics: [{ topic: 't', partitions: [{ partition: 2, offset: '10' }] }] });
         expect(f.commits).toHaveLength(0); // no separate commit
         expect(events.map((e) => e.type)).toEqual(['dlq']);
     });
@@ -214,7 +214,7 @@ describe('strict consumer (unit)', () => {
         expect(handler).toHaveBeenCalledTimes(1);
     });
 
-    it('partition concurrency is passed to kafkajs; commits are per message', async () => {
+    it('partition concurrency is passed to the client; commits are per message', async () => {
         const f = fake();
         const { consumer } = strict(f, jest.fn());
         await consumer.withPartitionConcurrency(8).start();
@@ -222,11 +222,12 @@ describe('strict consumer (unit)', () => {
         expect(() => consumer.withPartitionConcurrency(0)).toThrow();
     });
 
-    it('default mode is unchanged: auto-commit stays on, handler errors are rethrown for kafkajs', async () => {
+    it('default mode is unchanged: auto-commit stays on, handler errors are rethrown for the client to retry', async () => {
         const f = fake();
         const consumer = new Consumer(f.broker).withGroupId('g').withTopic('t').onMessage(jest.fn().mockRejectedValue(new Error('boom')));
         await consumer.start();
         await expect(f.deliver('{"a":1}')).rejects.toThrow('boom');
+        expect(f.kafka.consumer.mock.calls[0][0].kafkaJS.autoCommit).toBeUndefined();
         expect((f.kafka as any).runOptions.autoCommit).toBeUndefined();
         expect(f.commits).toHaveLength(0);
     });

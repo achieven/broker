@@ -1,6 +1,6 @@
 {
   "name": "@achieven/broker",
-  "version": "0.1.11",
+  "version": "0.2.0",
   "description": "Kafka broker module shared across bpm-music-runner services",
   "author": "",
   "license": "UNLICENSED",
@@ -25,7 +25,7 @@
     "test:integration": "jest --config jest.integration.config.js"
   },
   "dependencies": {
-    "kafkajs": "2.2.4"
+    "@confluentinc/kafka-javascript": "1.11.0"
   },
   "peerDependencies": {
     "@nestjs/common": ">=10 <12",
